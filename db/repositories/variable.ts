@@ -1,6 +1,8 @@
 import "server-only";
+import mongoose from "mongoose";
 import { VariableExpense, type VariableExpenseDoc } from "@/db/models/VariableExpense";
 import { connectDb } from "@/db/client";
+import { endOfMonthUtc, startOfMonthUtc, utcMidnight } from "@/lib/format/date";
 
 export type PlainVariable = {
   id: string;
@@ -9,6 +11,7 @@ export type PlainVariable = {
   currency: string;
   categoryId: string;
   note: string | null;
+  tags: string[];
   createdAt: Date;
   updatedAt: Date;
 };
@@ -26,6 +29,7 @@ function toPlain(d: Lean): PlainVariable {
     currency: d.currency,
     categoryId: d.categoryId.toString(),
     note: d.note,
+    tags: Array.isArray(d.tags) ? [...d.tags] : [],
     createdAt: d.createdAt,
     updatedAt: d.updatedAt,
   };
@@ -40,6 +44,10 @@ export type ListVariableOptions = {
   skip?: number;
 };
 
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function buildFilter(
   userId: string,
   opts: ListVariableOptions,
@@ -52,7 +60,7 @@ function buildFilter(
     filter.date = range;
   }
   if (opts.categoryIds?.length) filter.categoryId = { $in: opts.categoryIds };
-  if (opts.text) filter.note = { $regex: opts.text, $options: "i" };
+  if (opts.text) filter.note = { $regex: escapeRegex(opts.text), $options: "i" };
   return filter;
 }
 
@@ -132,4 +140,90 @@ export async function deleteVariable(
   await connectDb();
   const res = await VariableExpense.deleteOne({ _id: id, userId }).exec();
   return res.deletedCount === 1;
+}
+
+export async function bulkDeleteVariable(
+  userId: string,
+  ids: string[],
+): Promise<number> {
+  if (ids.length === 0) return 0;
+  await connectDb();
+  const res = await VariableExpense.deleteMany({
+    userId,
+    _id: { $in: ids },
+  }).exec();
+  return res.deletedCount ?? 0;
+}
+
+export async function bulkSetCategory(
+  userId: string,
+  ids: string[],
+  categoryId: string,
+): Promise<number> {
+  if (ids.length === 0) return 0;
+  await connectDb();
+  const res = await VariableExpense.updateMany(
+    { userId, _id: { $in: ids } },
+    { $set: { categoryId } },
+  ).exec();
+  return res.modifiedCount ?? 0;
+}
+
+export type VariableSummary = {
+  monthTotalPaise: number;
+  todayTotalPaise: number;
+  todayCount: number;
+};
+
+/**
+ * Single-aggregation summary used by the /variable anchor card. Returns
+ * the running monthly total plus today's slice (total + count). All
+ * three values come from one round-trip; the `(userId, date)` index
+ * already covers the $match.
+ *
+ * `now` is parameterized for testability — call sites can leave it
+ * defaulted to `new Date()`.
+ */
+export async function variableSummary(
+  userId: string,
+  now: Date = new Date(),
+): Promise<VariableSummary> {
+  await connectDb();
+  const monthStart = startOfMonthUtc(now);
+  const monthEnd = endOfMonthUtc(now);
+  const todayStart = utcMidnight(now);
+
+  const rows = await VariableExpense.aggregate<{
+    monthTotal: number;
+    todayTotal: number;
+    todayCount: number;
+  }>([
+    {
+      $match: {
+        userId: new mongoose.Types.ObjectId(userId),
+        date: { $gte: monthStart, $lte: monthEnd },
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        monthTotal: { $sum: "$amountPaise" },
+        todayTotal: {
+          $sum: {
+            $cond: [{ $gte: ["$date", todayStart] }, "$amountPaise", 0],
+          },
+        },
+        todayCount: {
+          $sum: { $cond: [{ $gte: ["$date", todayStart] }, 1, 0] },
+        },
+      },
+    },
+  ]).exec();
+
+  const r = rows[0];
+  return {
+    monthTotalPaise: r?.monthTotal ?? 0,
+    todayTotalPaise: r?.todayTotal ?? 0,
+    todayCount: r?.todayCount ?? 0,
+  };
 }

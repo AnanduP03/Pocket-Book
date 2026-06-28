@@ -87,7 +87,7 @@ export function CategoryForm({ open, onOpenChange, category }: Props) {
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent>
+      <SheetContent className="overflow-y-auto">
         <SheetHeader>
           <SheetTitle>{editing ? "Edit category" : "New category"}</SheetTitle>
         </SheetHeader>

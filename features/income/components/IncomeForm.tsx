@@ -91,7 +91,7 @@ export function IncomeForm({
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent>
+      <SheetContent className="overflow-y-auto">
         <SheetHeader>
           <SheetTitle>{editing ? "Edit income" : "New income"}</SheetTitle>
         </SheetHeader>

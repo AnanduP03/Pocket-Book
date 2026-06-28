@@ -2,19 +2,33 @@ import "server-only";
 import { listCategories, type PlainCategory } from "@/db/repositories/categories";
 import { listFixed, type PlainFixedExpense } from "@/db/repositories/fixed";
 import { incomeForMonthEnd } from "@/db/repositories/income";
+import {
+  listPaymentsForRange,
+  type PlainPayment,
+} from "@/db/repositories/payments";
 import { listVariable, type PlainVariable } from "@/db/repositories/variable";
 import {
   getSavingsBalance,
+  getSavingsBalanceByGoal,
   hasMonthCover,
   hasMonthSurplus,
+  sumSavingsInRange,
 } from "@/db/repositories/savings";
-import { getSettings } from "@/db/repositories/settings";
 import {
+  getSettings,
+  type PlainNamedSavingsGoal,
+} from "@/db/repositories/settings";
+import {
+  cycleBoundsAt,
   deriveStatus,
   renewalsInRange,
-  type Rule,
+  ruleOf,
 } from "@/features/fixed/lib/billing";
-import { endOfMonthUtc, startOfMonthUtc } from "@/lib/format/date";
+import {
+  endOfMonthUtc,
+  startOfMonthUtc,
+  toDateInputValue,
+} from "@/lib/format/date";
 import { requireUser } from "@/lib/auth/server";
 
 const MONTH_LABELS_SHORT = [
@@ -32,6 +46,7 @@ export type FixedStatusCounts = {
   overdue: number;
   upcoming: number;
   inactive: number;
+  skipped: number;
 };
 
 export type CategoryWithTrend = {
@@ -54,6 +69,48 @@ export type MonthlyBreakdown = {
   fixed: CategoryWithTrend[];
 };
 
+export type DayVariableItem = {
+  id: string;
+  amountPaise: number;
+  categoryId: string;
+  note: string | null;
+};
+
+export type DayFixedItem = {
+  id: string;
+  name: string;
+  amountPaise: number;
+  categoryId: string;
+  kind: "paid" | "scheduled";
+};
+
+export type DayDetail = {
+  date: string;
+  totalPaise: number;
+  variableItems: DayVariableItem[];
+  fixedItems: DayFixedItem[];
+};
+
+export type MonthlyDailySpend = {
+  label: string;
+  year: number;
+  month: number;
+  daysInMonth: number;
+  totalPaise: number;
+  maxDayPaise: number;
+  days: DayDetail[];
+};
+
+export type MonthlyTotal = {
+  label: string;
+  year: number;
+  month: number;
+  incomePaise: number;
+  variablePaise: number;
+  fixedPaise: number;
+  freeCashPaise: number;
+};
+
 export type PendingSweep = {
   monthLabel: string;
   monthStart: string; // ISO
@@ -67,17 +124,26 @@ export type ShortfallHint = {
   coverablePaise: number;
 };
 
+export type SpendingClimate = "tight" | "brisk" | "steady" | "surplus";
+
 export type DashboardData = {
   currency: string;
   locale: string;
   monthlyIncomePaise: number;
   monthlyFixedPaise: number;
   monthlyVariablePaise: number;
+  remainingFixedPaise: number;
+  avgVariablePaise: number;
+  trailingMonthsForAvg: number;
   freeCashPaise: number;
   projectedEndOfMonthFreeCashPaise: number;
+  projectedRunsOutAtIso: string | null;
   daysInMonth: number;
   daysElapsed: number;
+  todaySpendPaise: number;
   monthlyBreakdowns: MonthlyBreakdown[];
+  monthlyTotals: MonthlyTotal[];
+  dailySpend: MonthlyDailySpend[];
   statusCounts: FixedStatusCounts;
   fixedHighlights: PlainFixedExpense[];
   recentVariable: PlainVariable[];
@@ -86,15 +152,65 @@ export type DashboardData = {
   pendingSweep: PendingSweep | null;
   shortfallHint: ShortfallHint | null;
   savingsBalance: number;
+  savingsThisMonthDeltaPaise: number;
+  savingsGoalAmountPaise: number | null;
+  savingsGoalTargetDate: string | null;
+  monthlySavingsAvgPaise: number;
+  savingsGoals: PlainNamedSavingsGoal[];
+  /** Serialized as plain entries since Map isn't JSON-serializable. Keyed
+   *  by goalId; "" key (empty string) holds unallocated / legacy entries. */
+  savingsBalanceByGoal: Record<string, number>;
+  /** Single-word ambient indicator computed from current-month spend
+   *  vs historical baselines. Surfaced as a pill at the top of the
+   *  dashboard so the user can read the temperature of the month at a
+   *  glance, without parsing numbers. */
+  spendingClimate: SpendingClimate;
 };
 
-function ruleOf(f: PlainFixedExpense): Rule {
-  return {
-    startDate: new Date(f.startDate),
-    intervalValue: f.intervalValue,
-    intervalUnit: f.intervalUnit,
-    endDate: f.endDate ? new Date(f.endDate) : null,
-  };
+/** Lean payload SSR'd into the dashboard page. Excludes the heaviest pieces
+ *  (`monthlyBreakdowns`, `dailySpend`) which load asynchronously via React
+ *  Query in the chart components. */
+export type DashboardCoreData = Omit<
+  DashboardData,
+  "monthlyBreakdowns" | "dailySpend"
+>;
+
+/** Charts-only slice fetched client-side via React Query. */
+export type DashboardChartsData = Pick<
+  DashboardData,
+  "monthlyBreakdowns" | "dailySpend"
+>;
+
+/**
+ * Classify the current month's spending temperature.
+ *
+ *  - tight    : projected end-of-month free cash is negative
+ *  - brisk    : on pace to spend ≥ 115% of trailing variable average
+ *  - surplus  : projected free cash ≥ 25% of monthly income
+ *  - steady   : everything else
+ *
+ * `null` is returned only when there's no income to anchor to (fresh
+ * accounts) so callers can decide how to display it; we collapse to
+ * "steady" before returning.
+ */
+function classifyClimate(args: {
+  monthlyIncomePaise: number;
+  monthlyVariablePaise: number;
+  avgVariablePaise: number;
+  daysElapsed: number;
+  daysInMonth: number;
+  projectedFreeCashPaise: number;
+}): SpendingClimate {
+  const { monthlyIncomePaise, monthlyVariablePaise, avgVariablePaise, daysElapsed, daysInMonth, projectedFreeCashPaise } = args;
+  if (projectedFreeCashPaise < 0) return "tight";
+  if (avgVariablePaise > 0 && daysElapsed > 0) {
+    const projectedVariable = (monthlyVariablePaise / daysElapsed) * daysInMonth;
+    if (projectedVariable >= avgVariablePaise * 1.15) return "brisk";
+  }
+  if (monthlyIncomePaise > 0 && projectedFreeCashPaise >= monthlyIncomePaise * 0.25) {
+    return "surplus";
+  }
+  return "steady";
 }
 
 type MonthBucket = {
@@ -132,7 +248,12 @@ function fillBucket(
 ): void {
   for (const f of fixedItems) {
     if (!f.isActive) continue;
-    const renewals = renewalsInRange(ruleOf(f), b.start, b.end);
+    const renewals = renewalsInRange(
+      ruleOf(f),
+      b.start,
+      b.end,
+      f.skippedCycles ?? null,
+    );
     if (renewals.length === 0) continue;
     const sum = renewals.length * f.amountPaise;
     b.fixedPaise += sum;
@@ -187,7 +308,110 @@ function computeBreakdown(
   return out;
 }
 
-export async function fetchDashboard(): Promise<DashboardData> {
+function buildDailySpend(
+  bucket: MonthBucket,
+  fixedItems: PlainFixedExpense[],
+  variableItems: PlainVariable[],
+  payments: PlainPayment[],
+  fixedById: Map<string, PlainFixedExpense>,
+  paidCycleKeys: Set<string>,
+  todayMidnightUtc: Date,
+): MonthlyDailySpend {
+  const byDate = new Map<string, DayDetail>();
+  const ensure = (date: string): DayDetail => {
+    let d = byDate.get(date);
+    if (!d) {
+      d = { date, totalPaise: 0, variableItems: [], fixedItems: [] };
+      byDate.set(date, d);
+    }
+    return d;
+  };
+
+  for (const p of payments) {
+    const paid = new Date(p.paidDate);
+    if (
+      paid.getTime() < bucket.start.getTime() ||
+      paid.getTime() > bucket.end.getTime()
+    )
+      continue;
+    const f = fixedById.get(p.fixedExpenseId);
+    if (!f) continue;
+    const d = ensure(toDateInputValue(paid));
+    d.totalPaise += p.amountPaise;
+    d.fixedItems.push({
+      id: `pay-${p.id}`,
+      name: f.name,
+      amountPaise: p.amountPaise,
+      categoryId: f.categoryId,
+      kind: "paid",
+    });
+  }
+
+  for (const f of fixedItems) {
+    if (!f.isActive) continue;
+    const renewals = renewalsInRange(
+      ruleOf(f),
+      bucket.start,
+      bucket.end,
+      f.skippedCycles ?? null,
+    );
+    for (const r of renewals) {
+      if (r.getTime() < todayMidnightUtc.getTime()) continue;
+      const cycleKey = `${f.id}:${toDateInputValue(r)}`;
+      if (paidCycleKeys.has(cycleKey)) continue;
+      const date = toDateInputValue(r);
+      const d = ensure(date);
+      d.totalPaise += f.amountPaise;
+      d.fixedItems.push({
+        id: `sch-${f.id}-${date}`,
+        name: f.name,
+        amountPaise: f.amountPaise,
+        categoryId: f.categoryId,
+        kind: "scheduled",
+      });
+    }
+  }
+
+  for (const v of variableItems) {
+    const dt = new Date(v.date);
+    if (
+      dt.getTime() < bucket.start.getTime() ||
+      dt.getTime() > bucket.end.getTime()
+    )
+      continue;
+    const d = ensure(toDateInputValue(dt));
+    d.totalPaise += v.amountPaise;
+    d.variableItems.push({
+      id: v.id,
+      amountPaise: v.amountPaise,
+      categoryId: v.categoryId,
+      note: v.note,
+    });
+  }
+
+  let totalPaise = 0;
+  let maxDayPaise = 0;
+  for (const d of byDate.values()) {
+    totalPaise += d.totalPaise;
+    if (d.totalPaise > maxDayPaise) maxDayPaise = d.totalPaise;
+  }
+
+  const days = Array.from(byDate.values()).sort((a, b) =>
+    a.date.localeCompare(b.date),
+  );
+
+  return {
+    label: bucket.label,
+    year: bucket.year,
+    month: bucket.month,
+    daysInMonth: bucket.end.getUTCDate(),
+    totalPaise,
+    maxDayPaise,
+    days,
+  };
+}
+
+export async function fetchDashboardCore(): Promise<DashboardCoreData> {
   const user = await requireUser();
   const now = new Date();
   const monthStart = startOfMonthUtc(now);
@@ -200,6 +424,21 @@ export async function fetchDashboard(): Promise<DashboardData> {
   const sixMonthsAgo = startOfMonthUtc(
     new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 5, 1)),
   );
+  const threeMoBackStart = startOfMonthUtc(
+    new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 3, 1)),
+  );
+
+  const fixedItemsPromise = listFixed(user.id);
+
+  const monthRefs: Date[] = [];
+  for (let i = 5; i >= 0; i--) {
+    monthRefs.push(
+      new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1)),
+    );
+  }
+  const monthIncomePromises = monthRefs.map((ref) =>
+    incomeForMonthEnd(user.id, endOfMonthUtc(ref)),
+  );
 
   const [
     settings,
@@ -211,9 +450,13 @@ export async function fetchDashboard(): Promise<DashboardData> {
     savingsBalance,
     monthSurplusAlreadySwept,
     monthCoverAlreadyRecorded,
+    savingsThisMonthDeltaPaise,
+    monthIncomes,
+    trailingThreeMoSavingsSum,
+    savingsBalanceByGoalMap,
   ] = await Promise.all([
     getSettings(user.id),
-    listFixed(user.id),
+    fixedItemsPromise,
     listVariable(user.id, {
       start: sixMonthsAgo,
       end: monthEnd,
@@ -225,9 +468,20 @@ export async function fetchDashboard(): Promise<DashboardData> {
     getSavingsBalance(user.id),
     hasMonthSurplus(user.id, lastMonthStart, lastMonthEnd),
     hasMonthCover(user.id, monthStart, monthEnd),
+    sumSavingsInRange(user.id, monthStart, monthEnd),
+    Promise.all(monthIncomePromises),
+    sumSavingsInRange(user.id, threeMoBackStart, lastMonthEnd),
+    getSavingsBalanceByGoal(user.id),
   ]);
 
-  const categoryById = new Map(categories.map((c) => [c.id, c] as const));
+  const savingsBalanceByGoal: Record<string, number> = {};
+  for (const [k, v] of savingsBalanceByGoalMap) {
+    savingsBalanceByGoal[k ?? ""] = v;
+  }
+
+  const todayMidnightUtc = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
 
   const buckets: MonthBucket[] = [];
   for (let i = 5; i >= 0; i--) {
@@ -259,44 +513,45 @@ export async function fetchDashboard(): Promise<DashboardData> {
     monthlyVariablePaise -
     projectedExtraVariable;
 
-  const monthlyBreakdowns: MonthlyBreakdown[] = buckets.map((bucket, i) => {
-    const trailing = buckets.slice(0, i);
-    return {
-      label: bucket.label,
-      year: bucket.year,
-      month: bucket.month,
-      trailingCount: trailing.length,
-      variable: computeBreakdown(
-        bucket.variableByCategory,
-        trailing.map((b) => b.variableByCategory),
-        categoryById,
-        "Variable",
-      ),
-      fixed: computeBreakdown(
-        bucket.fixedByCategory,
-        trailing.map((b) => b.fixedByCategory),
-        categoryById,
-        "Fixed",
-      ),
-    };
-  });
+  // Forecast: at current burn, when does free cash hit zero?
+  // null when free cash is already gone, when the projection ends positive
+  // ("on track"), or when burn is zero. The date is clamped to month-end
+  // since free-cash semantics reset at month boundaries.
+  let projectedRunsOutAtIso: string | null = null;
+  if (
+    freeCashPaise > 0 &&
+    projectedEndOfMonthFreeCashPaise < 0 &&
+    dailyVariableBurn > 0
+  ) {
+    const daysFromToday = Math.ceil(freeCashPaise / dailyVariableBurn);
+    const out = new Date(now.getTime());
+    out.setUTCDate(out.getUTCDate() + daysFromToday);
+    if (out.getTime() > monthEnd.getTime()) {
+      projectedRunsOutAtIso = monthEnd.toISOString();
+    } else {
+      projectedRunsOutAtIso = out.toISOString();
+    }
+  }
 
   const statusCounts: FixedStatusCounts = {
     paid: 0,
     overdue: 0,
     upcoming: 0,
     inactive: 0,
+    skipped: 0,
   };
   const overdue: PlainFixedExpense[] = [];
   const upcoming: PlainFixedExpense[] = [];
   const paid: PlainFixedExpense[] = [];
   const autoDebitNeedsConfirm: PlainFixedExpense[] = [];
+  let remainingFixedPaise = 0;
   for (const f of fixedItems) {
     const status = deriveStatus(
       ruleOf(f),
       f.lastPaidDate ? new Date(f.lastPaidDate) : null,
       now,
       f.isActive,
+      f.skippedCycles ?? null,
     );
     if (status === "paid") {
       statusCounts.paid++;
@@ -308,15 +563,39 @@ export async function fetchDashboard(): Promise<DashboardData> {
     } else if (status === "upcoming") {
       statusCounts.upcoming++;
       upcoming.push(f);
+    } else if (status === "skipped") {
+      statusCounts.skipped++;
     } else {
       statusCounts.inactive++;
+    }
+
+    if (!f.isActive) continue;
+    const lastPaid = f.lastPaidDate ? new Date(f.lastPaidDate) : null;
+    let countFrom = monthStart;
+    if (lastPaid) {
+      const bounds = cycleBoundsAt(ruleOf(f), lastPaid);
+      if (bounds) {
+        const dayAfterCycle = new Date(bounds.end.getTime() + 86_400_000);
+        if (dayAfterCycle.getTime() > countFrom.getTime()) {
+          countFrom = dayAfterCycle;
+        }
+      }
+    }
+    if (countFrom.getTime() <= monthEnd.getTime()) {
+      const renewals = renewalsInRange(
+        ruleOf(f),
+        countFrom,
+        monthEnd,
+        f.skippedCycles ?? null,
+      );
+      remainingFixedPaise += renewals.length * f.amountPaise;
     }
   }
   const fixedHighlights = [...overdue, ...upcoming, ...paid].slice(0, 6);
 
-  const recentVariable = [...variableItems]
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-    .slice(0, 8);
+  // listVariable returns items sorted by date desc, _id desc — no need
+  // to re-sort the (potentially large) trailing-6-month list here.
+  const recentVariable = variableItems.slice(0, 8);
 
   let pendingSweep: PendingSweep | null = null;
   if (!monthSurplusAlreadySwept) {
@@ -346,17 +625,63 @@ export async function fetchDashboard(): Promise<DashboardData> {
     };
   }
 
+  const trailingBuckets = buckets.slice(0, -1);
+  const activeTrailingBuckets = trailingBuckets.filter(
+    (b) => b.variablePaise > 0 || b.fixedPaise > 0,
+  );
+  const trailingMonthsForAvg = activeTrailingBuckets.length;
+  const avgVariablePaise =
+    trailingMonthsForAvg > 0
+      ? Math.round(
+          activeTrailingBuckets.reduce((s, b) => s + b.variablePaise, 0) /
+            trailingMonthsForAvg,
+        )
+      : 0;
+
+  const monthlyTotals: MonthlyTotal[] = buckets.map((b, i) => {
+    const incomePaise = monthIncomes[i]?.amountPaise ?? 0;
+    const freeCashPaise = incomePaise - b.fixedPaise - b.variablePaise;
+    return {
+      label: b.label,
+      year: b.year,
+      month: b.month,
+      incomePaise,
+      variablePaise: b.variablePaise,
+      fixedPaise: b.fixedPaise,
+      freeCashPaise,
+    };
+  });
+
+  const todayIso = toDateInputValue(todayMidnightUtc);
+  let todaySpendPaise = 0;
+  for (const v of variableItems) {
+    if (toDateInputValue(new Date(v.date)) === todayIso) {
+      todaySpendPaise += v.amountPaise;
+    }
+  }
+
+  const monthlySavingsAvgPaise = Math.round(trailingThreeMoSavingsSum / 3);
+  const savingsGoalAmountPaise = settings.savingsGoal?.amountPaise ?? null;
+  const savingsGoalTargetDate = settings.savingsGoal?.targetDate
+    ? settings.savingsGoal.targetDate.toISOString()
+    : null;
+
   return {
     currency: settings.defaultCurrency,
     locale: settings.locale,
     monthlyIncomePaise,
     monthlyFixedPaise,
     monthlyVariablePaise,
+    remainingFixedPaise,
+    avgVariablePaise,
+    trailingMonthsForAvg,
     freeCashPaise,
     projectedEndOfMonthFreeCashPaise,
+    projectedRunsOutAtIso,
     daysInMonth,
     daysElapsed,
-    monthlyBreakdowns,
+    todaySpendPaise,
+    monthlyTotals,
     statusCounts,
     fixedHighlights,
     recentVariable,
@@ -365,5 +690,111 @@ export async function fetchDashboard(): Promise<DashboardData> {
     pendingSweep,
     shortfallHint,
     savingsBalance,
+    savingsThisMonthDeltaPaise,
+    savingsGoalAmountPaise,
+    savingsGoalTargetDate,
+    monthlySavingsAvgPaise,
+    savingsGoals: settings.savingsGoals,
+    savingsBalanceByGoal,
+    spendingClimate: classifyClimate({
+      monthlyIncomePaise,
+      monthlyVariablePaise,
+      avgVariablePaise,
+      daysElapsed,
+      daysInMonth,
+      projectedFreeCashPaise: projectedEndOfMonthFreeCashPaise,
+    }),
   };
 }
+
+export async function fetchDashboardCharts(): Promise<DashboardChartsData> {
+  const user = await requireUser();
+  const now = new Date();
+  const monthEnd = endOfMonthUtc(now);
+  const sixMonthsAgo = startOfMonthUtc(
+    new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 5, 1)),
+  );
+
+  const fixedItemsPromise = listFixed(user.id);
+  const paymentsPromise = fixedItemsPromise.then((items) =>
+    listPaymentsForRange(
+      user.id,
+      items.map((f) => f.id),
+      sixMonthsAgo,
+      monthEnd,
+    ),
+  );
+
+  const [fixedItems, variableItems, categories, payments] = await Promise.all([
+    fixedItemsPromise,
+    listVariable(user.id, {
+      start: sixMonthsAgo,
+      end: monthEnd,
+      limit: 10_000,
+    }),
+    listCategories(user.id),
+    paymentsPromise,
+  ]);
+
+  const categoryById = new Map(categories.map((c) => [c.id, c] as const));
+  const fixedById = new Map(fixedItems.map((f) => [f.id, f] as const));
+
+  const paidCycleKeys = new Set<string>();
+  for (const p of payments) {
+    const f = fixedById.get(p.fixedExpenseId);
+    if (!f) continue;
+    const bounds = cycleBoundsAt(ruleOf(f), new Date(p.paidDate));
+    if (bounds) {
+      paidCycleKeys.add(`${f.id}:${toDateInputValue(bounds.start)}`);
+    }
+  }
+
+  const todayMidnightUtc = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
+  );
+
+  const buckets: MonthBucket[] = [];
+  for (let i = 5; i >= 0; i--) {
+    const ref = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - i, 1));
+    const b = buildBucket(ref);
+    fillBucket(b, fixedItems, variableItems);
+    buckets.push(b);
+  }
+
+  const monthlyBreakdowns: MonthlyBreakdown[] = buckets.map((bucket, i) => {
+    const trailing = buckets.slice(0, i);
+    return {
+      label: bucket.label,
+      year: bucket.year,
+      month: bucket.month,
+      trailingCount: trailing.length,
+      variable: computeBreakdown(
+        bucket.variableByCategory,
+        trailing.map((b) => b.variableByCategory),
+        categoryById,
+        "Variable",
+      ),
+      fixed: computeBreakdown(
+        bucket.fixedByCategory,
+        trailing.map((b) => b.fixedByCategory),
+        categoryById,
+        "Fixed",
+      ),
+    };
+  });
+
+  const dailySpend = buckets.map((b) =>
+    buildDailySpend(
+      b,
+      fixedItems,
+      variableItems,
+      payments,
+      fixedById,
+      paidCycleKeys,
+      todayMidnightUtc,
+    ),
+  );
+
+  return { monthlyBreakdowns, dailySpend };
+}
+

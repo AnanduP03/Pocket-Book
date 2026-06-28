@@ -15,6 +15,7 @@ export interface FixedExpenseDoc {
   intervalUnit: IntervalUnit;
   endDate: Date | null;
   lastPaidDate: Date | null;
+  skippedCycles: Date[];
   note: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -52,6 +53,7 @@ const fixedExpenseSchema = new Schema<FixedExpenseDoc>(
     },
     endDate: { type: Date, default: null },
     lastPaidDate: { type: Date, default: null },
+    skippedCycles: { type: [Date], default: [] },
     note: { type: String, default: null, maxlength: 280 },
   },
   { timestamps: true, collection: "fixed_expenses" },
@@ -59,7 +61,9 @@ const fixedExpenseSchema = new Schema<FixedExpenseDoc>(
 
 fixedExpenseSchema.index({ userId: 1, categoryId: 1 });
 fixedExpenseSchema.index({ userId: 1, isActive: 1 });
-fixedExpenseSchema.index({ userId: 1, lastPaidDate: 1 });
+// Backs the dominant read pattern `find({userId}).sort({name:1})` used by
+// listFixed — without it Mongo falls back to in-memory sort.
+fixedExpenseSchema.index({ userId: 1, name: 1 });
 
 fixedExpenseSchema.pre("validate", function (this: FixedExpenseDoc) {
   if (this.endDate && this.endDate.getTime() < this.startDate.getTime()) {

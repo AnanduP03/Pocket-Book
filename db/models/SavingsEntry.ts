@@ -13,6 +13,8 @@ export interface SavingsEntryDoc {
   kind: SavingsEntryKind;
   effectiveDate: Date;
   note: string | null;
+  /** Optional named-goal allocation. Null = general (legacy) entry. */
+  goalId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -40,12 +42,14 @@ const savingsSchema = new Schema<SavingsEntryDoc>(
     },
     effectiveDate: { type: Date, required: true },
     note: { type: String, default: null, maxlength: 280 },
+    goalId: { type: String, default: null, maxlength: 40 },
   },
   { timestamps: true, collection: "savings_entries" },
 );
 
 savingsSchema.index({ userId: 1, effectiveDate: -1 });
 savingsSchema.index({ userId: 1, kind: 1, effectiveDate: 1 });
+savingsSchema.index({ userId: 1, goalId: 1, effectiveDate: 1 });
 
 export const SavingsEntry: Model<SavingsEntryDoc> =
   (models.SavingsEntry as Model<SavingsEntryDoc> | undefined) ??

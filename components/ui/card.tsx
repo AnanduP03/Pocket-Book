@@ -6,7 +6,7 @@ export const Card = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
     <div
       ref={ref}
       className={cn(
-        "rounded-[var(--radius-card)] border border-(--border) bg-(--surface) p-6",
+        "rounded-[var(--radius-card)] border border-(--border) bg-(--surface) p-4 sm:p-6",
         className,
       )}
       {...props}
@@ -19,7 +19,10 @@ export const CardHeader = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivEleme
   ({ className, ...props }, ref) => (
     <div
       ref={ref}
-      className={cn("mb-4 flex items-start justify-between gap-4", className)}
+      className={cn(
+        "mb-4 flex flex-wrap items-start justify-between gap-x-4 gap-y-2",
+        className,
+      )}
       {...props}
     />
   ),

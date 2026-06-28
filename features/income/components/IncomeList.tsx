@@ -27,7 +27,8 @@ export function IncomeList({
     return (
       <div className="rounded-[var(--radius-card)] border border-dashed border-(--border) bg-(--surface) p-8 text-center">
         <p className="text-sm text-(--muted)">
-          No income entries yet. Log your monthly rate to start tracking free cash.
+          We need a rough income figure to show free cash. Drop one in once
+          — we'll handle the math from there.
         </p>
       </div>
     );
@@ -54,7 +55,7 @@ export function IncomeList({
                   </span>
                 ) : null}
               </div>
-              <p className="mt-0.5 text-xs text-(--muted)">
+              <p className="mt-0.5 truncate text-xs text-(--muted)">
                 Effective {formatDate(new Date(e.effectiveDate), locale)}
                 {e.note ? ` · ${e.note}` : ""}
               </p>

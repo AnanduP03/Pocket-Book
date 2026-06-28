@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { SignupForm } from "./SignupForm";
+import { safeReturnTo } from "@/lib/auth/return-to";
 
 type SearchParams = { returnTo?: string };
 
@@ -9,6 +10,7 @@ export default async function SignupPage({
   searchParams: Promise<SearchParams>;
 }) {
   const { returnTo } = await searchParams;
+  const safe = safeReturnTo(returnTo);
   return (
     <div className="flex flex-col gap-5">
       <div>
@@ -20,12 +22,12 @@ export default async function SignupPage({
         </p>
       </div>
 
-      <SignupForm returnTo={returnTo ?? "/dashboard"} />
+      <SignupForm returnTo={safe} />
 
       <p className="text-xs text-(--muted)">
         Already have an account?{" "}
         <Link
-          href={`/auth/login${returnTo ? `?returnTo=${encodeURIComponent(returnTo)}` : ""}`}
+          href={`/auth/login?returnTo=${encodeURIComponent(safe)}`}
           className="font-medium text-(--accent) underline-offset-2 hover:underline"
         >
           Sign in

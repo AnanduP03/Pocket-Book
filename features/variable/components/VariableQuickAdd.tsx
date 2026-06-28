@@ -8,6 +8,10 @@ import { Button } from "@/components/ui/button";
 import { MoneyInput } from "@/features/shared/components/MoneyInput";
 import { CategoryIcon } from "@/features/categories/components/CategoryIcon";
 import { createVariableAction } from "../actions";
+import {
+  rankByRecent,
+  useRecentCategories,
+} from "../lib/use-recent-categories";
 import { todayUtc } from "@/lib/format/date";
 import { cn } from "@/lib/utils";
 import type { PlainCategory } from "@/db/repositories/categories";
@@ -16,6 +20,7 @@ type Props = {
   categories: PlainCategory[];
   defaultCurrency: string;
   defaultLocale: string;
+  compact?: boolean;
 };
 
 const LAST_CATEGORY_KEY = "pocketbook:last-variable-category";
@@ -24,9 +29,14 @@ export function VariableQuickAdd({
   categories,
   defaultCurrency,
   defaultLocale,
+  compact = false,
 }: Props) {
   const queryClient = useQueryClient();
+  const { recent, recordUse } = useRecentCategories();
   const variableCats = categories.filter((c) => c.type === "Variable");
+  // Recent first, fall back to original order. The chip row picks this up
+  // automatically; user's "usuals" land at the start of the row.
+  const rankedCats = rankByRecent(variableCats, recent);
 
   const [amountPaise, setAmountPaise] = useState(0);
   const [categoryId, setCategoryId] = useState(variableCats[0]?.id ?? "");
@@ -52,12 +62,17 @@ export function VariableQuickAdd({
         categoryId,
         note: null,
       }),
+    onSettled: async () => {
+      // Always reconcile with server. Invalidates both the variable list
+      // and the dashboard so today's spend / heatmap pick up the new entry.
+      await queryClient.invalidateQueries({ queryKey: ["variable"] });
+      await queryClient.invalidateQueries({ queryKey: ["dashboard"] });
+    },
     onSuccess: async (res) => {
       if (!res.ok) {
         toast.error(res.error.message);
         return;
       }
-      await queryClient.invalidateQueries({ queryKey: ["variable"] });
       const cat = variableCats.find((c) => c.id === categoryId);
       toast.success(`Logged${cat ? ` · ${cat.name}` : ""}`);
       try {
@@ -65,6 +80,7 @@ export function VariableQuickAdd({
       } catch {
         // ignore storage errors
       }
+      recordUse(categoryId);
       setAmountPaise(0);
       requestAnimationFrame(() => {
         const el = document.querySelector<HTMLInputElement>(
@@ -72,6 +88,9 @@ export function VariableQuickAdd({
         );
         el?.focus();
       });
+    },
+    onError: () => {
+      toast.error("Couldn't log expense — try again");
     },
   });
 
@@ -102,6 +121,75 @@ export function VariableQuickAdd({
     );
   }
 
+  if (compact) {
+    return (
+      <div
+        className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-(--border) bg-(--surface) p-4"
+        onKeyDown={onKeyDown}
+      >
+        <MoneyInput
+          id="quick-add-amount"
+          valueMinor={amountPaise}
+          onChangeMinor={setAmountPaise}
+          currency={defaultCurrency}
+          locale={defaultLocale}
+          autoFocus
+          aria-label="Amount"
+        />
+
+        <div
+          role="radiogroup"
+          aria-label="Category"
+          className="flex flex-wrap gap-2"
+        >
+          {rankedCats.map((c) => {
+            const active = categoryId === c.id;
+            return (
+              <button
+                key={c.id}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                onClick={() => setCategoryId(c.id)}
+                className={cn(
+                  "inline-flex items-center gap-2 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ring)",
+                  active
+                    ? "border-(--accent) bg-(--accent)/30 text-(--text)"
+                    : "border-(--border) bg-(--surface-2)/40 text-(--muted) hover:bg-(--surface-2) hover:text-(--text)",
+                )}
+              >
+                <span
+                  aria-hidden
+                  className="h-2 w-2 rounded-full"
+                  style={{ background: c.color }}
+                />
+                {c.name}
+              </button>
+            );
+          })}
+        </div>
+
+        <Button
+          type="button"
+          onClick={submit}
+          disabled={mutation.isPending}
+          className="w-full"
+        >
+          <Plus className="h-4 w-4" aria-hidden />
+          {mutation.isPending ? "Logging…" : "Log expense"}
+        </Button>
+
+        <p className="text-xs text-(--muted)">
+          Press{" "}
+          <kbd className="rounded border border-(--border) bg-(--surface-2) px-1 font-mono text-[10px]">
+            Enter
+          </kbd>{" "}
+          to log · Date is today
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div
       className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-(--border) bg-(--surface) p-4"
@@ -123,9 +211,9 @@ export function VariableQuickAdd({
         <div
           role="radiogroup"
           aria-label="Category"
-          className="flex flex-1 flex-wrap gap-1.5"
+          className="flex flex-1 flex-wrap gap-2"
         >
-          {variableCats.map((c) => {
+          {rankedCats.map((c) => {
             const active = categoryId === c.id;
             return (
               <button

@@ -47,7 +47,8 @@ export function SavingsList({
     return (
       <div className="rounded-[var(--radius-card)] border border-dashed border-(--border) bg-(--surface) p-8 text-center">
         <p className="text-sm text-(--muted)">
-          No Savings activity yet. Add a deposit, or wait for the month-end sweep banner on the dashboard.
+          Savings is quiet. Once you sweep a surplus or log a deposit, this
+          list fills up on its own.
         </p>
       </div>
     );

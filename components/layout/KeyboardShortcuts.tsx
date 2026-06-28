@@ -79,6 +79,10 @@ export function KeyboardShortcuts() {
           disarm();
           return;
         }
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent("pocketbook:open-quick-log"));
+        disarm();
+        return;
       }
 
       if (armedRef.current) {

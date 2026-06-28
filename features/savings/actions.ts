@@ -6,6 +6,7 @@ import {
   createSavings,
   deleteSavings,
   getSavingsBalance,
+  getSavingsBalanceByGoal,
   hasMonthCover,
   hasMonthSurplus,
   listSavings,
@@ -73,7 +74,7 @@ function sumFixedRenewalsInRange(
   let total = 0;
   for (const f of fixedItems) {
     if (!f.isActive) continue;
-    const r = renewalsInRange(ruleOf(f), start, end);
+    const r = renewalsInRange(ruleOf(f), start, end, f.skippedCycles ?? null);
     total += r.length * f.amountPaise;
   }
   return total;
@@ -116,6 +117,7 @@ export async function createDepositAction(
       effectiveDate: parsed.data.effectiveDate,
       note: parsed.data.note,
       kind: "manual_deposit",
+      goalId: parsed.data.goalId,
     });
     revalidateAll();
     return { ok: true, data: created };
@@ -131,14 +133,21 @@ export async function createWithdrawalAction(
   const parsed = savingsInputSchema.safeParse(raw);
   if (!parsed.success) return fromValidation(parsed.error);
   try {
-    const balance = await getSavingsBalance(user.id);
-    if (balance - parsed.data.amountPaise < 0) {
+    // Validate against the SELECTED bucket's balance rather than the
+    // grand total — a user with a fully-funded Goal A and nothing in
+    // Goal B shouldn't be able to "withdraw from B" just because the
+    // total is positive.
+    const balanceByGoal = await getSavingsBalanceByGoal(user.id);
+    const bucketBalance = balanceByGoal.get(parsed.data.goalId) ?? 0;
+    if (bucketBalance - parsed.data.amountPaise < 0) {
       return {
         ok: false,
         error: {
           code: "INSUFFICIENT_BALANCE",
           field: "amountPaise",
-          message: "Withdrawal exceeds the current Savings balance.",
+          message: parsed.data.goalId
+            ? "Withdrawal exceeds this goal's balance."
+            : "Withdrawal exceeds the unallocated balance.",
         },
       };
     }
@@ -147,6 +156,7 @@ export async function createWithdrawalAction(
       effectiveDate: parsed.data.effectiveDate,
       note: parsed.data.note,
       kind: "manual_withdrawal",
+      goalId: parsed.data.goalId,
     });
     revalidateAll();
     return { ok: true, data: created };
@@ -225,9 +235,16 @@ export async function fetchPendingSweep(): Promise<PendingSweep | null> {
   };
 }
 
+export type SweepAllocation = {
+  goalId: string;
+  goalName: string;
+  amountPaise: number;
+};
+
 export async function sweepMonthSurplusAction(
   pending: PendingSweep,
-): Promise<ActionResult<PlainSavingsEntry>> {
+  allocations?: SweepAllocation[],
+): Promise<ActionResult<{ entries: PlainSavingsEntry[] }>> {
   const user = await requireUser();
   try {
     const monthStart = new Date(pending.monthStart);
@@ -247,6 +264,47 @@ export async function sweepMonthSurplusAction(
         error: { code: "VALIDATION", message: "No surplus to sweep." },
       };
     }
+
+    // If allocations supplied, validate sum matches the surplus and split
+    // into per-goal entries. Otherwise fall through to a single aggregate
+    // entry (back-compat for users without named goals).
+    if (allocations && allocations.length > 0) {
+      const total = allocations.reduce((s, a) => s + a.amountPaise, 0);
+      if (total !== pending.surplusPaise) {
+        return {
+          ok: false,
+          error: {
+            code: "VALIDATION",
+            message: `Allocations must total the surplus (${pending.surplusPaise} paise, got ${total}).`,
+          },
+        };
+      }
+      for (const a of allocations) {
+        if (!Number.isInteger(a.amountPaise) || a.amountPaise <= 0) {
+          return {
+            ok: false,
+            error: {
+              code: "VALIDATION",
+              message: "Each allocation must be a positive integer.",
+            },
+          };
+        }
+      }
+      const entries: PlainSavingsEntry[] = [];
+      for (const a of allocations) {
+        const entry = await createSavings(user.id, {
+          amountPaise: a.amountPaise,
+          effectiveDate: monthEnd,
+          note: `Month-end sweep — ${pending.monthLabel} · ${a.goalName}`,
+          kind: "month_surplus",
+          goalId: a.goalId,
+        });
+        entries.push(entry);
+      }
+      revalidateAll();
+      return { ok: true, data: { entries } };
+    }
+
     const created = await createSavings(user.id, {
       amountPaise: pending.surplusPaise,
       effectiveDate: monthEnd,
@@ -254,7 +312,7 @@ export async function sweepMonthSurplusAction(
       kind: "month_surplus",
     });
     revalidateAll();
-    return { ok: true, data: created };
+    return { ok: true, data: { entries: [created] } };
   } catch (err) {
     return fromUnknown(err);
   }

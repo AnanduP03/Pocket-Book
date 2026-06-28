@@ -1,26 +1,15 @@
 "use client";
 
 import { useMemo } from "react";
-import {
-  CheckCircle2,
-  History,
-  Pencil,
-  Trash2,
-  Undo2,
-  Zap,
-} from "lucide-react";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { Switch } from "@/components/ui/switch";
-import { CategoryIcon } from "@/features/categories/components/CategoryIcon";
-import { StatusChip } from "./StatusChip";
-import { formatCurrency } from "@/lib/format/money";
-import { deriveStatus, type Rule } from "../lib/billing";
+import { CollapsibleSection } from "@/features/variable/components/CollapsibleSection";
+import { FixedCardCompact, type CompactSection } from "./FixedCardCompact";
+import { FixedCardFull, type FullSection } from "./FixedCardFull";
+import type { StatusGroups } from "../lib/group-by-status";
 import type { PlainFixedExpense } from "@/db/repositories/fixed";
 import type { PlainCategory } from "@/db/repositories/categories";
 
 type Props = {
-  items: PlainFixedExpense[];
+  groups: StatusGroups;
   categories: PlainCategory[];
   currency: string;
   locale: string;
@@ -28,35 +17,16 @@ type Props = {
   onHistory: (f: PlainFixedExpense) => void;
   onMarkPaid: (f: PlainFixedExpense) => void;
   onUnmarkPaid: (f: PlainFixedExpense) => void;
+  onSkip: (f: PlainFixedExpense) => void;
+  onUnskip: (f: PlainFixedExpense) => void;
   onToggleActive: (f: PlainFixedExpense) => void;
   onDelete: (f: PlainFixedExpense) => void;
   busyId?: string | null;
   emptyMessage?: string;
 };
 
-const SHORT_LABELS: Record<string, string> = {
-  day: "Daily",
-  week: "Weekly",
-  month: "Monthly",
-  year: "Yearly",
-};
-
-function intervalLabel(value: number, unit: string): string {
-  if (value === 1) return SHORT_LABELS[unit] ?? `Every ${unit}`;
-  return `Every ${value} ${unit}s`;
-}
-
-function ruleOf(f: PlainFixedExpense): Rule {
-  return {
-    startDate: new Date(f.startDate),
-    intervalValue: f.intervalValue,
-    intervalUnit: f.intervalUnit,
-    endDate: f.endDate ? new Date(f.endDate) : null,
-  };
-}
-
 export function FixedList({
-  items,
+  groups,
   categories,
   currency,
   locale,
@@ -64,6 +34,8 @@ export function FixedList({
   onHistory,
   onMarkPaid,
   onUnmarkPaid,
+  onSkip,
+  onUnskip,
   onToggleActive,
   onDelete,
   busyId,
@@ -75,7 +47,15 @@ export function FixedList({
     return m;
   }, [categories]);
 
-  if (items.length === 0) {
+  const total =
+    groups.overdue.length +
+    groups.skipped.length +
+    groups.upcoming.length +
+    groups.paid.length +
+    groups.paused.length +
+    groups.ended.length;
+
+  if (total === 0) {
     return (
       <div className="rounded-[var(--radius-card)] border border-dashed border-(--border) bg-(--surface) p-8 text-center">
         <p className="text-sm text-(--muted)">
@@ -85,136 +65,100 @@ export function FixedList({
     );
   }
 
-  const now = new Date();
+  function renderFullSection(
+    title: string,
+    items: PlainFixedExpense[],
+    section: FullSection,
+  ) {
+    if (items.length === 0) return null;
+    return (
+      <section aria-labelledby={`status-${section}`}>
+        <h2
+          id={`status-${section}`}
+          className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-(--muted)"
+        >
+          {title} ({items.length})
+        </h2>
+        <ul className="flex flex-col gap-2">
+          {items.map((f) => (
+            <FixedCardFull
+              key={f.id}
+              fixed={f}
+              category={categoryById.get(f.categoryId)}
+              section={section}
+              currency={currency}
+              locale={locale}
+              onEdit={onEdit}
+              onHistory={onHistory}
+              onMarkPaid={onMarkPaid}
+              onSkip={onSkip}
+              onUnskip={onUnskip}
+              onUnmarkPaid={onUnmarkPaid}
+              onToggleActive={onToggleActive}
+              onDelete={onDelete}
+              busy={busyId === f.id}
+            />
+          ))}
+        </ul>
+      </section>
+    );
+  }
+
+  function renderCompactSection(
+    title: string,
+    items: PlainFixedExpense[],
+    section: CompactSection,
+    expanded: boolean,
+  ) {
+    if (items.length === 0) return null;
+    const list = (
+      <ul className="flex flex-col gap-2">
+        {items.map((f) => (
+          <FixedCardCompact
+            key={f.id}
+            fixed={f}
+            category={categoryById.get(f.categoryId)}
+            section={section}
+            currency={currency}
+            locale={locale}
+            onEdit={onEdit}
+            onHistory={onHistory}
+            onUnmarkPaid={onUnmarkPaid}
+            onToggleActive={onToggleActive}
+            onDelete={onDelete}
+            busy={busyId === f.id}
+          />
+        ))}
+      </ul>
+    );
+    if (expanded) {
+      return (
+        <section aria-labelledby={`status-${section}`}>
+          <h2
+            id={`status-${section}`}
+            className="mb-2 text-[11px] font-semibold uppercase tracking-[0.18em] text-(--muted)"
+          >
+            {title} ({items.length})
+          </h2>
+          {list}
+        </section>
+      );
+    }
+    return (
+      <CollapsibleSection title={`${title} (${items.length})`}>
+        {list}
+      </CollapsibleSection>
+    );
+  }
 
   return (
-    <ul className="grid gap-3 sm:grid-cols-2">
-      {items.map((f) => {
-        const c = categoryById.get(f.categoryId);
-        const busy = busyId === f.id;
-        const rule = ruleOf(f);
-        const lastPaid = f.lastPaidDate ? new Date(f.lastPaidDate) : null;
-        const status = deriveStatus(rule, lastPaid, now, f.isActive);
-        const showMarkPaid = f.isActive && status === "overdue";
-        const showUnmark = f.isActive && status === "paid" && lastPaid;
-
-        return (
-          <li
-            key={f.id}
-            className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-(--border) bg-(--surface) p-4"
-          >
-            <div className="flex items-start gap-3">
-              {c ? (
-                <CategoryIcon name={c.icon} color={c.color} size="md" />
-              ) : (
-                <span
-                  className="inline-flex h-9 w-9 items-center justify-center rounded-[var(--radius-input)] bg-(--surface-2)"
-                  aria-hidden
-                />
-              )}
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1.5">
-                  <p className="truncate text-sm font-medium text-(--text)">
-                    {f.name}
-                  </p>
-                  {f.isAutoDebit ? (
-                    <Zap
-                      aria-label="Auto-debit"
-                      className="h-3 w-3 text-(--muted)"
-                    />
-                  ) : null}
-                </div>
-                <p className="truncate text-xs text-(--muted)">
-                  {c?.name ?? "Unknown category"}
-                </p>
-              </div>
-              <p className="shrink-0 tabular-nums text-sm font-semibold text-(--text)">
-                {formatCurrency(f.amountPaise, currency, locale)}
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-1.5 text-xs">
-              <Badge tone="muted">
-                {intervalLabel(f.intervalValue, f.intervalUnit)}
-              </Badge>
-              <StatusChip
-                rule={rule}
-                lastPaidDate={lastPaid}
-                isActive={f.isActive}
-                locale={locale}
-              />
-            </div>
-
-            <div className="flex items-center justify-between gap-2">
-              <label className="flex cursor-pointer items-center gap-2 text-xs text-(--muted)">
-                <Switch
-                  checked={f.isActive}
-                  onCheckedChange={() => onToggleActive(f)}
-                  disabled={busy}
-                  ariaLabel={`Toggle active for ${f.name}`}
-                />
-                {f.isActive ? "Active" : "Paused"}
-              </label>
-
-              <div className="flex shrink-0 gap-1">
-                {showMarkPaid ? (
-                  <Button
-                    type="button"
-                    variant="primary"
-                    size="sm"
-                    disabled={busy}
-                    onClick={() => onMarkPaid(f)}
-                  >
-                    <CheckCircle2 className="h-3.5 w-3.5" aria-hidden /> Mark paid
-                  </Button>
-                ) : null}
-                {showUnmark ? (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    aria-label="Undo paid"
-                    disabled={busy}
-                    onClick={() => onUnmarkPaid(f)}
-                  >
-                    <Undo2 className="h-4 w-4" aria-hidden />
-                  </Button>
-                ) : null}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`History for ${f.name}`}
-                  disabled={busy}
-                  onClick={() => onHistory(f)}
-                >
-                  <History className="h-4 w-4" aria-hidden />
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Edit ${f.name}`}
-                  disabled={busy}
-                  onClick={() => onEdit(f)}
-                >
-                  <Pencil className="h-4 w-4" aria-hidden />
-                </Button>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  aria-label={`Delete ${f.name}`}
-                  disabled={busy}
-                  onClick={() => onDelete(f)}
-                >
-                  <Trash2 className="h-4 w-4" aria-hidden />
-                </Button>
-              </div>
-            </div>
-          </li>
-        );
-      })}
-    </ul>
+    <div className="flex flex-col gap-5">
+      {renderFullSection("Overdue", groups.overdue, "overdue")}
+      {renderFullSection("Skipped", groups.skipped, "skipped")}
+      {renderCompactSection("Upcoming", groups.upcoming, "upcoming", true)}
+      {renderCompactSection("Paid", groups.paid, "paid", false)}
+      {renderCompactSection("Paused", groups.paused, "paused", false)}
+      {renderCompactSection("Ended", groups.ended, "ended", false)}
+    </div>
   );
 }

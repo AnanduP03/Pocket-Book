@@ -42,41 +42,45 @@ export function SweepBanner({ pending, currency, locale }: Props) {
   if (!pending || dismissed) return null;
 
   return (
-    <div className="flex items-center gap-3 rounded-[var(--radius-card)] border border-(--success)/40 bg-(--success)/15 p-4">
-      <span
-        aria-hidden
-        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-(--success)/40"
-      >
-        <CalendarCheck className="h-4 w-4 text-(--text)" />
-      </span>
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium text-(--text)">
-          {pending.monthLabel} closed with a surplus
-        </p>
-        <p className="mt-0.5 text-xs text-(--muted)">
-          +{formatCurrency(pending.surplusPaise, currency, locale)} can move into
-          Savings.
-        </p>
+    <div className="flex flex-col gap-3 rounded-[var(--radius-card)] border border-(--success)/40 bg-(--success)/15 p-4 sm:flex-row sm:items-center">
+      <div className="flex items-center gap-3 min-w-0 flex-1">
+        <span
+          aria-hidden
+          className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-(--success)/40"
+        >
+          <CalendarCheck className="h-4 w-4 text-(--text)" />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-(--text)">
+            {pending.monthLabel} closed with a surplus
+          </p>
+          <p className="mt-0.5 text-xs text-(--muted)">
+            +{formatCurrency(pending.surplusPaise, currency, locale)} can move into
+            Savings.
+          </p>
+        </div>
       </div>
-      <Button
-        type="button"
-        size="icon"
-        variant="ghost"
-        aria-label="Skip"
-        onClick={() => setDismissed(true)}
-        disabled={mutation.isPending}
-      >
-        <X className="h-4 w-4" aria-hidden />
-      </Button>
-      <Button
-        type="button"
-        size="sm"
-        disabled={mutation.isPending}
-        onClick={() => mutation.mutate()}
-      >
-        <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
-        {mutation.isPending ? "Sweeping…" : "Sweep"}
-      </Button>
+      <div className="flex shrink-0 items-center justify-end gap-2 pl-11 sm:pl-0">
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          aria-label="Skip"
+          onClick={() => setDismissed(true)}
+          disabled={mutation.isPending}
+        >
+          <X className="h-4 w-4" aria-hidden />
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          disabled={mutation.isPending}
+          onClick={() => mutation.mutate()}
+        >
+          <CheckCircle2 className="h-3.5 w-3.5" aria-hidden />
+          {mutation.isPending ? "Sweeping…" : "Sweep"}
+        </Button>
+      </div>
     </div>
   );
 }

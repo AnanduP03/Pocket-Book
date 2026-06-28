@@ -19,6 +19,7 @@ export type PlainFixedExpense = {
   intervalUnit: IntervalUnit;
   endDate: Date | null;
   lastPaidDate: Date | null;
+  skippedCycles: Date[];
   note: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -42,6 +43,7 @@ function toPlain(d: Lean): PlainFixedExpense {
     intervalUnit: d.intervalUnit,
     endDate: d.endDate,
     lastPaidDate: d.lastPaidDate,
+    skippedCycles: Array.isArray(d.skippedCycles) ? [...d.skippedCycles] : [],
     note: d.note,
     createdAt: d.createdAt,
     updatedAt: d.updatedAt,
@@ -75,9 +77,10 @@ export async function getFixedById(
 
 export type NewFixedInput = Omit<
   PlainFixedExpense,
-  "id" | "createdAt" | "updatedAt" | "lastPaidDate"
+  "id" | "createdAt" | "updatedAt" | "lastPaidDate" | "skippedCycles"
 > & {
   lastPaidDate?: Date | null;
+  skippedCycles?: Date[];
 };
 
 export async function createFixed(
@@ -89,6 +92,7 @@ export async function createFixed(
     ...input,
     userId,
     lastPaidDate: input.lastPaidDate ?? null,
+    skippedCycles: input.skippedCycles ?? [],
   });
   return toPlain(created.toObject() as unknown as Lean);
 }
@@ -148,6 +152,38 @@ export async function setLastPaidDate(
   const doc = await FixedExpense.findOneAndUpdate(
     { _id: id, userId },
     { lastPaidDate: date },
+    { returnDocument: "after" },
+  )
+    .lean<Lean | null>()
+    .exec();
+  return doc ? toPlain(doc) : null;
+}
+
+export async function addSkippedCycle(
+  userId: string,
+  id: string,
+  cycleDate: Date,
+): Promise<PlainFixedExpense | null> {
+  await connectDb();
+  const doc = await FixedExpense.findOneAndUpdate(
+    { _id: id, userId },
+    { $addToSet: { skippedCycles: cycleDate } },
+    { returnDocument: "after" },
+  )
+    .lean<Lean | null>()
+    .exec();
+  return doc ? toPlain(doc) : null;
+}
+
+export async function removeSkippedCycle(
+  userId: string,
+  id: string,
+  cycleDate: Date,
+): Promise<PlainFixedExpense | null> {
+  await connectDb();
+  const doc = await FixedExpense.findOneAndUpdate(
+    { _id: id, userId },
+    { $pull: { skippedCycles: cycleDate } },
     { returnDocument: "after" },
   )
     .lean<Lean | null>()

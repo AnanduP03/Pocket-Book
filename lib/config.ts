@@ -1,5 +1,6 @@
-export const MONGODB_URI =
-  process.env.MONGODB_URI ?? "mongodb://127.0.0.1:27017/finance_tracker";
+import { env } from "./env";
+
+export const MONGODB_URI = env.MONGODB_URI;
 
 export const DEFAULT_CURRENCY = "INR";
 export const DEFAULT_LOCALE = "en-IN";

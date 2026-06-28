@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { FormError, FormField } from "@/components/ui/form-field";
+import { safeReturnTo } from "@/lib/auth/return-to";
 
 const loginSchema = z.object({
   email: z.string().trim().toLowerCase().email("Enter a valid email"),
@@ -40,7 +41,7 @@ export function LoginForm({ returnTo }: { returnTo: string }) {
       });
       return;
     }
-    router.replace(returnTo);
+    router.replace(safeReturnTo(returnTo));
     router.refresh();
   }
 

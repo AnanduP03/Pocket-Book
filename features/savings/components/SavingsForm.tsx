@@ -1,6 +1,7 @@
 "use client";
 
-import { Controller, useForm } from "react-hook-form";
+import { useEffect, useMemo } from "react";
+import { Controller, useForm, useWatch } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -14,6 +15,13 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { FormError, FormField } from "@/components/ui/form-field";
 import { MoneyInput } from "@/features/shared/components/MoneyInput";
 import { DatePicker } from "@/features/shared/components/DatePicker";
@@ -23,23 +31,69 @@ import {
   createWithdrawalAction,
   type ActionResult,
 } from "../actions";
+import { formatCurrency } from "@/lib/format/money";
 import type { PlainSavingsEntry } from "@/db/repositories/savings";
+import type { PlainNamedSavingsGoal } from "@/db/repositories/settings";
 import { todayUtc } from "@/lib/format/date";
 
 type Mode = "deposit" | "withdrawal";
+
+/** Sentinel value for "Unallocated" in the goal <Select>. We can't use
+ *  the empty string because shadcn's SelectItem rejects empty values. */
+const UNALLOCATED_VALUE = "__unallocated__";
 
 type Props = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   mode: Mode;
+  goals: PlainNamedSavingsGoal[];
+  /** Per-bucket balances keyed by goalId ("" key = unallocated). */
+  balanceByGoal: Record<string, number>;
   defaultCurrency: string;
   defaultLocale: string;
 };
+
+function pickDefaultGoalId(
+  mode: Mode,
+  goals: PlainNamedSavingsGoal[],
+  balanceByGoal: Record<string, number>,
+): string | null {
+  if (goals.length === 0) return null;
+  if (mode === "withdrawal") {
+    // Withdraw from the goal with the largest positive balance —
+    // that's the bucket most likely to have headroom.
+    let bestId: string | null = null;
+    let best = 0;
+    for (const g of goals) {
+      const bal = balanceByGoal[g.id] ?? 0;
+      if (bal > best) {
+        best = bal;
+        bestId = g.id;
+      }
+    }
+    return bestId;
+  }
+  // Deposit: prefer the *least funded* goal so the user nudges progress
+  // where it's most needed. Falls back to the first goal.
+  let bestId: string | null = goals[0]?.id ?? null;
+  let worstPct = Infinity;
+  for (const g of goals) {
+    const bal = Math.max(0, balanceByGoal[g.id] ?? 0);
+    const pct = g.amountPaise > 0 ? bal / g.amountPaise : 0;
+    if (pct < worstPct) {
+      worstPct = pct;
+      bestId = g.id;
+    }
+  }
+  return bestId;
+}
 
 export function SavingsForm({
   open,
   onOpenChange,
   mode,
+  goals,
+  balanceByGoal,
   defaultCurrency,
   defaultLocale,
 }: Props) {
@@ -51,8 +105,29 @@ export function SavingsForm({
       amountPaise: 0,
       effectiveDate: todayUtc(),
       note: null,
+      goalId: pickDefaultGoalId(mode, goals, balanceByGoal),
     },
   });
+
+  // Reset the goal default whenever the sheet (re-)opens so external
+  // changes (e.g. a new sweep that filled a goal) influence the pick.
+  useEffect(() => {
+    if (open) {
+      form.reset({
+        amountPaise: 0,
+        effectiveDate: todayUtc(),
+        note: null,
+        goalId: pickDefaultGoalId(mode, goals, balanceByGoal),
+      });
+    }
+  }, [open, mode, goals, balanceByGoal, form]);
+
+  const selectedGoalId = useWatch({ control: form.control, name: "goalId" });
+  const selectedBucket = useMemo(() => {
+    const bal = balanceByGoal[selectedGoalId ?? ""] ?? 0;
+    const goal = goals.find((g) => g.id === selectedGoalId);
+    return { bal, goal };
+  }, [selectedGoalId, balanceByGoal, goals]);
 
   const mutation = useMutation<ActionResult<PlainSavingsEntry>, Error, SavingsInput>({
     mutationFn: (values) =>
@@ -73,11 +148,6 @@ export function SavingsForm({
       await queryClient.invalidateQueries({ queryKey: ["savings"] });
       toast.success(mode === "deposit" ? "Deposit added" : "Withdrawal recorded");
       onOpenChange(false);
-      form.reset({
-        amountPaise: 0,
-        effectiveDate: todayUtc(),
-        note: null,
-      });
     },
     onError: (err) => form.setError("root", { message: err.message }),
   });
@@ -92,9 +162,11 @@ export function SavingsForm({
         ? "Saving…"
         : "Withdraw";
 
+  const hasGoals = goals.length > 0;
+
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent>
+      <SheetContent className="overflow-y-auto">
         <SheetHeader>
           <SheetTitle>{title}</SheetTitle>
         </SheetHeader>
@@ -104,6 +176,74 @@ export function SavingsForm({
           className="flex flex-1 flex-col gap-5"
           noValidate
         >
+          {hasGoals ? (
+            <FormField>
+              <Label htmlFor="savings-goal">
+                {mode === "deposit" ? "Add to" : "Withdraw from"}
+              </Label>
+              <Controller
+                name="goalId"
+                control={form.control}
+                render={({ field }) => (
+                  <Select
+                    value={field.value ?? UNALLOCATED_VALUE}
+                    onValueChange={(v) =>
+                      field.onChange(v === UNALLOCATED_VALUE ? null : v)
+                    }
+                  >
+                    <SelectTrigger id="savings-goal">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {goals.map((g) => {
+                        const bal = balanceByGoal[g.id] ?? 0;
+                        const filled = bal >= g.amountPaise;
+                        return (
+                          <SelectItem key={g.id} value={g.id}>
+                            {g.name} ·{" "}
+                            {formatCurrency(bal, defaultCurrency, defaultLocale)}
+                            {filled ? " · ✓ reached" : ""}
+                          </SelectItem>
+                        );
+                      })}
+                      <SelectItem value={UNALLOCATED_VALUE}>
+                        Unallocated ·{" "}
+                        {formatCurrency(
+                          balanceByGoal[""] ?? 0,
+                          defaultCurrency,
+                          defaultLocale,
+                        )}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+              <p className="text-[11px] text-(--muted)">
+                {mode === "withdrawal"
+                  ? `Available in this bucket: ${formatCurrency(
+                      selectedBucket.bal,
+                      defaultCurrency,
+                      defaultLocale,
+                    )}`
+                  : selectedBucket.goal
+                    ? `Target: ${formatCurrency(
+                        selectedBucket.goal.amountPaise,
+                        defaultCurrency,
+                        defaultLocale,
+                      )} · current: ${formatCurrency(
+                        selectedBucket.bal,
+                        defaultCurrency,
+                        defaultLocale,
+                      )}`
+                    : `Unallocated balance: ${formatCurrency(
+                        selectedBucket.bal,
+                        defaultCurrency,
+                        defaultLocale,
+                      )}`}
+              </p>
+            </FormField>
+          ) : null}
+
           <FormField>
             <Label htmlFor="savings-amount">Amount</Label>
             <Controller

@@ -116,3 +116,50 @@ export async function deleteCategory(
   const res = await Category.deleteOne({ _id: id, userId }).exec();
   return res.deletedCount === 1;
 }
+
+export type DeleteIfUnusedResult =
+  | { ok: true }
+  | { ok: false; reason: "NOT_FOUND" }
+  | { ok: false; reason: "IN_USE"; usage: CategoryUsage };
+
+/**
+ * Atomic check-and-delete: counts referencing expenses inside the same
+ * transaction as the delete, so a concurrent expense create either
+ * lands before the count (delete blocks) or after (the new row survives).
+ * Closes the race window in the previous check-then-delete pattern.
+ */
+export async function deleteCategoryIfUnused(
+  userId: string,
+  id: string,
+): Promise<DeleteIfUnusedResult> {
+  await connectDb();
+  const session = await Category.startSession();
+  try {
+    let result: DeleteIfUnusedResult = { ok: false, reason: "NOT_FOUND" };
+    await session.withTransaction(async () => {
+      const [fixedExpenseCount, variableExpenseCount] = await Promise.all([
+        FixedExpense.countDocuments({ categoryId: id, userId })
+          .session(session)
+          .exec(),
+        VariableExpense.countDocuments({ categoryId: id, userId })
+          .session(session)
+          .exec(),
+      ]);
+      if (fixedExpenseCount + variableExpenseCount > 0) {
+        result = {
+          ok: false,
+          reason: "IN_USE",
+          usage: { fixedExpenseCount, variableExpenseCount },
+        };
+        return;
+      }
+      const res = await Category.deleteOne({ _id: id, userId }, { session }).exec();
+      result = res.deletedCount === 1
+        ? { ok: true }
+        : { ok: false, reason: "NOT_FOUND" };
+    });
+    return result;
+  } finally {
+    await session.endSession();
+  }
+}

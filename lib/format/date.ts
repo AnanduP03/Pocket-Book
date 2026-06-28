@@ -7,7 +7,7 @@ export function utcMidnight(d: Date): Date {
 export function todayUtc(): Date {
   const now = new Date();
   return new Date(
-    Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()),
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()),
   );
 }
 

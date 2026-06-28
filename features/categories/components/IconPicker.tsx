@@ -14,7 +14,7 @@ export function IconPicker({
     <div
       role="radiogroup"
       aria-label="Icon"
-      className="grid max-h-44 grid-cols-7 gap-1.5 overflow-y-auto rounded-[var(--radius-input)] border border-(--border) bg-(--surface-2)/40 p-2"
+      className="grid grid-cols-7 gap-1.5 rounded-[var(--radius-input)] border border-(--border) bg-(--surface-2)/40 p-2 sm:max-h-44 sm:overflow-y-auto"
     >
       {ICON_NAMES.map((name) => {
         const Icon = ICON_MAP[name];

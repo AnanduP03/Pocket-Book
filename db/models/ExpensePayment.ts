@@ -7,6 +7,10 @@ export interface ExpensePaymentDoc {
   paidDate: Date;
   amountPaise: number;
   note: string | null;
+  /** "Did you use it this cycle?" recorded inline at mark-paid (or via
+   *  the dashboard prompt). null = unknown / not asked yet, true / false
+   *  feed the subscription-review deck. */
+  usedThisCycle: boolean | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -29,6 +33,7 @@ const expensePaymentSchema = new Schema<ExpensePaymentDoc>(
       },
     },
     note: { type: String, default: null, maxlength: 280 },
+    usedThisCycle: { type: Boolean, default: null },
   },
   { timestamps: true, collection: "expense_payments" },
 );

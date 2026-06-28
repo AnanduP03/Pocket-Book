@@ -3,9 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { categoryInputSchema } from "./schema";
 import {
-  categoryUsage,
   createCategory,
-  deleteCategory,
+  deleteCategoryIfUnused,
   listCategories,
   updateCategory,
   type PlainCategory,
@@ -97,29 +96,28 @@ export async function deleteCategoryAction(
 ): Promise<ActionResult<{ id: string }>> {
   const user = await requireUser();
   try {
-    const usage = await categoryUsage(user.id, id);
-    const total = usage.fixedExpenseCount + usage.variableExpenseCount;
-    if (total > 0) {
-      const parts: string[] = [];
-      if (usage.fixedExpenseCount > 0)
-        parts.push(`${usage.fixedExpenseCount} fixed expense${usage.fixedExpenseCount === 1 ? "" : "s"}`);
-      if (usage.variableExpenseCount > 0)
-        parts.push(`${usage.variableExpenseCount} variable expense${usage.variableExpenseCount === 1 ? "" : "s"}`);
-      return {
-        ok: false,
-        error: {
-          code: "CATEGORY_IN_USE",
-          message: `Linked to ${parts.join(" and ")}. Reassign or delete those first.`,
-        },
-      };
+    const result = await deleteCategoryIfUnused(user.id, id);
+    if (result.ok) {
+      revalidatePath("/categories");
+      revalidatePath("/dashboard");
+      return { ok: true, data: { id } };
     }
-    const deleted = await deleteCategory(user.id, id);
-    if (!deleted) {
+    if (result.reason === "NOT_FOUND") {
       return { ok: false, error: { code: "NOT_FOUND", message: "Category not found" } };
     }
-    revalidatePath("/categories");
-    revalidatePath("/dashboard");
-    return { ok: true, data: { id } };
+    const { fixedExpenseCount, variableExpenseCount } = result.usage;
+    const parts: string[] = [];
+    if (fixedExpenseCount > 0)
+      parts.push(`${fixedExpenseCount} fixed expense${fixedExpenseCount === 1 ? "" : "s"}`);
+    if (variableExpenseCount > 0)
+      parts.push(`${variableExpenseCount} variable expense${variableExpenseCount === 1 ? "" : "s"}`);
+    return {
+      ok: false,
+      error: {
+        code: "CATEGORY_IN_USE",
+        message: `Linked to ${parts.join(" and ")}. Reassign or delete those first.`,
+      },
+    };
   } catch (err) {
     return fromUnknown(err);
   }

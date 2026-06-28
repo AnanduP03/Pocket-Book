@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { FormError, FormField } from "@/components/ui/form-field";
+import { safeReturnTo } from "@/lib/auth/return-to";
 import { signupAction } from "./actions";
 import { signupInputSchema, type SignupInput } from "./schema";
 
@@ -47,7 +48,7 @@ export function SignupForm({ returnTo }: { returnTo: string }) {
       router.replace("/auth/login");
       return;
     }
-    router.replace(returnTo);
+    router.replace(safeReturnTo(returnTo));
     router.refresh();
   }
 

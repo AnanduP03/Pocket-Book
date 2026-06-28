@@ -5,6 +5,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { PageHeader } from "@/components/layout/PageHeader";
+import { SectionLabel } from "@/components/layout/SectionLabel";
 import { ConfirmDialog } from "@/features/shared/components/ConfirmDialog";
 import { CategoryForm } from "./CategoryForm";
 import { CategoryGrid } from "./CategoryGrid";
@@ -53,19 +55,28 @@ export function CategoryListView({ initial }: Props) {
 
   return (
     <div className="flex flex-col gap-8">
-      <header className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between sm:gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight text-(--text)">
-          Categories
-        </h1>
-        <Button onClick={() => setCreating(true)}>
-          <Plus className="h-4 w-4" aria-hidden /> New category
-        </Button>
-      </header>
+      <div className="rise-in" style={{ animationDelay: "0ms" }}>
+        <PageHeader
+          eyebrow="Organize"
+          title="Categories"
+          description="Tag every expense with a category so the dashboard can group and trend it. Pick from variable (one-off) or fixed (recurring)."
+          action={
+            <Button onClick={() => setCreating(true)}>
+              <Plus className="h-4 w-4" aria-hidden /> New category
+            </Button>
+          }
+        />
+      </div>
 
-      <section className="flex flex-col gap-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-(--muted)">
+      <section
+        className="rise-in flex flex-col gap-3"
+        style={{ animationDelay: "60ms" }}
+      >
+        <SectionLabel
+          trailing={`${grouped.fixed.length} ${grouped.fixed.length === 1 ? "category" : "categories"}`}
+        >
           Fixed
-        </h2>
+        </SectionLabel>
         <CategoryGrid
           categories={grouped.fixed}
           onEdit={(c) => setEditing(c)}
@@ -74,10 +85,15 @@ export function CategoryListView({ initial }: Props) {
         />
       </section>
 
-      <section className="flex flex-col gap-3">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-(--muted)">
+      <section
+        className="rise-in flex flex-col gap-3"
+        style={{ animationDelay: "120ms" }}
+      >
+        <SectionLabel
+          trailing={`${grouped.variable.length} ${grouped.variable.length === 1 ? "category" : "categories"}`}
+        >
           Variable
-        </h2>
+        </SectionLabel>
         <CategoryGrid
           categories={grouped.variable}
           onEdit={(c) => setEditing(c)}
