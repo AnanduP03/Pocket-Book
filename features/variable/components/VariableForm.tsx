@@ -22,10 +22,8 @@ import { DatePicker } from "@/features/shared/components/DatePicker";
 import { CategorySelect } from "@/features/shared/components/CategorySelect";
 import { TagInput } from "./TagInput";
 import { variableInputSchema, type VariableInput } from "../schema";
-import {
-  buildCategoryIndex,
-  predictCategory,
-} from "../lib/predict-category";
+import { buildCategoryIndex, predictCategory } from "../lib/predict-category";
+import { normalizeNote } from "../lib/normalize-note";
 import {
   createVariableAction,
   updateVariableAction,
@@ -91,7 +89,12 @@ export function VariableForm({
 
   const form = useForm<VariableInput>({
     resolver: zodResolver(variableInputSchema),
-    defaultValues: defaultsFor(categories, defaultCurrency, expense, initialDefaults),
+    defaultValues: defaultsFor(
+      categories,
+      defaultCurrency,
+      expense,
+      initialDefaults,
+    ),
     values: defaultsFor(categories, defaultCurrency, expense, initialDefaults),
   });
 
@@ -100,9 +103,7 @@ export function VariableForm({
   // hasn't manually picked one yet.
   const variableCategoryIds = useMemo(
     () =>
-      new Set(
-        categories.filter((c) => c.type === "Variable").map((c) => c.id),
-      ),
+      new Set(categories.filter((c) => c.type === "Variable").map((c) => c.id)),
     [categories],
   );
   const predictionIndex = useMemo(
@@ -161,7 +162,11 @@ export function VariableForm({
       ? (categories.find((c) => c.id === predictionApplied)?.name ?? null)
       : null;
 
-  const mutation = useMutation<ActionResult<PlainVariable>, Error, VariableInput>({
+  const mutation = useMutation<
+    ActionResult<PlainVariable>,
+    Error,
+    VariableInput
+  >({
     mutationFn: (values) =>
       editing && expense
         ? updateVariableAction(expense.id, values)
@@ -273,13 +278,7 @@ export function VariableForm({
             <Input
               id="variable-note"
               placeholder="What was this for?"
-              {...form.register("note", {
-                setValueAs: (v: unknown) => {
-                  if (typeof v !== "string") return null;
-                  const trimmed = v.trim();
-                  return trimmed === "" ? null : trimmed;
-                },
-              })}
+              {...form.register("note", { setValueAs: normalizeNote })}
               aria-invalid={Boolean(form.formState.errors.note)}
             />
             <FormError message={form.formState.errors.note?.message} />
@@ -314,7 +313,11 @@ export function VariableForm({
               Cancel
             </Button>
             <Button type="submit" disabled={mutation.isPending}>
-              {mutation.isPending ? "Saving…" : editing ? "Save changes" : "Log expense"}
+              {mutation.isPending
+                ? "Saving…"
+                : editing
+                  ? "Save changes"
+                  : "Log expense"}
             </Button>
           </SheetFooter>
         </form>

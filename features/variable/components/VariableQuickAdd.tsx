@@ -5,6 +5,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { MoneyInput } from "@/features/shared/components/MoneyInput";
 import { CategoryIcon } from "@/features/categories/components/CategoryIcon";
 import { createVariableAction } from "../actions";
@@ -12,6 +13,7 @@ import {
   rankByRecent,
   useRecentCategories,
 } from "../lib/use-recent-categories";
+import { normalizeNote } from "../lib/normalize-note";
 import { todayUtc } from "@/lib/format/date";
 import { cn } from "@/lib/utils";
 import type { PlainCategory } from "@/db/repositories/categories";
@@ -39,18 +41,20 @@ export function VariableQuickAdd({
   const rankedCats = rankByRecent(variableCats, recent);
 
   const [amountPaise, setAmountPaise] = useState(0);
+  const [label, setLabel] = useState("");
   const [categoryId, setCategoryId] = useState(variableCats[0]?.id ?? "");
 
   // Restore last-used category on mount
   useEffect(() => {
     if (variableCats.length === 0) return;
-    const saved = typeof window === "undefined"
-      ? null
-      : window.localStorage.getItem(LAST_CATEGORY_KEY);
+    const saved =
+      typeof window === "undefined"
+        ? null
+        : window.localStorage.getItem(LAST_CATEGORY_KEY);
     if (saved && variableCats.some((c) => c.id === saved)) {
       setCategoryId(saved);
     }
-  // run once per category set change
+    // run once per category set change
   }, [variableCats.length]);
 
   const mutation = useMutation({
@@ -60,7 +64,7 @@ export function VariableQuickAdd({
         amountPaise,
         currency: defaultCurrency,
         categoryId,
-        note: null,
+        note: normalizeNote(label),
       }),
     onSettled: async () => {
       // Always reconcile with server. Invalidates both the variable list
@@ -82,10 +86,10 @@ export function VariableQuickAdd({
       }
       recordUse(categoryId);
       setAmountPaise(0);
+      setLabel("");
       requestAnimationFrame(() => {
-        const el = document.querySelector<HTMLInputElement>(
-          "#quick-add-amount",
-        );
+        const el =
+          document.querySelector<HTMLInputElement>("#quick-add-amount");
         el?.focus();
       });
     },
@@ -168,6 +172,16 @@ export function VariableQuickAdd({
             );
           })}
         </div>
+
+        <Input
+          type="text"
+          autoComplete="off"
+          maxLength={280}
+          value={label}
+          onChange={(e) => setLabel(e.target.value)}
+          placeholder="Add a label (optional)"
+          aria-label="Label"
+        />
 
         <Button
           type="button"

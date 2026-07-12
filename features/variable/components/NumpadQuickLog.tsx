@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Check, Delete, Zap } from "lucide-react";
 import { CategoryIcon } from "@/features/categories/components/CategoryIcon";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { createVariableAction } from "../actions";
 import {
   rankByRecent,
@@ -14,6 +15,7 @@ import {
 import { todayUtc } from "@/lib/format/date";
 import { formatCurrency } from "@/lib/format/money";
 import { cn } from "@/lib/utils";
+import { normalizeNote } from "../lib/normalize-note";
 import type { PlainCategory } from "@/db/repositories/categories";
 import type { PlainQuickPreset } from "@/db/repositories/settings";
 
@@ -29,10 +31,18 @@ type Props = {
 };
 
 const ROW_KEYS: Array<number | "00" | "back"> = [
-  1, 2, 3,
-  4, 5, 6,
-  7, 8, 9,
-  "00", 0, "back",
+  1,
+  2,
+  3,
+  4,
+  5,
+  6,
+  7,
+  8,
+  9,
+  "00",
+  0,
+  "back",
 ];
 
 /**
@@ -71,7 +81,10 @@ export function NumpadQuickLog({
     if (!presets || presets.length === 0) return [];
     const variableIds = new Set(variableCats.map((c) => c.id));
     return presets.filter(
-      (p) => p.amountPaise > 0 && p.label.length > 0 && variableIds.has(p.categoryId),
+      (p) =>
+        p.amountPaise > 0 &&
+        p.label.length > 0 &&
+        variableIds.has(p.categoryId),
     );
   }, [presets, variableCats]);
   const categoryById = useMemo(
@@ -81,6 +94,7 @@ export function NumpadQuickLog({
 
   const [rupees, setRupees] = useState(0);
   const amountPaise = rupees * 100;
+  const [label, setLabel] = useState("");
 
   const [categoryId, setCategoryId] = useState<string>("");
   const [showAll, setShowAll] = useState(false);
@@ -116,13 +130,17 @@ export function NumpadQuickLog({
   }
 
   const mutation = useMutation({
-    mutationFn: (input: { amountPaise: number; categoryId: string }) =>
+    mutationFn: (input: {
+      amountPaise: number;
+      categoryId: string;
+      note: string | null;
+    }) =>
       createVariableAction({
         date: todayUtc(),
         amountPaise: input.amountPaise,
         currency: defaultCurrency,
         categoryId: input.categoryId,
-        note: null,
+        note: input.note,
       }),
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: ["variable"] });
@@ -142,6 +160,7 @@ export function NumpadQuickLog({
       }
       recordUse(vars.categoryId);
       setRupees(0);
+      setLabel("");
       onLogged();
     },
     onError: () => toast.error("Couldn't log expense — try again"),
@@ -156,13 +175,14 @@ export function NumpadQuickLog({
       toast.error("Pick a category");
       return;
     }
-    mutation.mutate({ amountPaise, categoryId });
+    mutation.mutate({ amountPaise, categoryId, note: normalizeNote(label) });
   }
 
   function logPreset(p: PlainQuickPreset) {
     mutation.mutate({
       amountPaise: p.amountPaise,
       categoryId: p.categoryId,
+      note: null,
     });
   }
 
@@ -182,6 +202,23 @@ export function NumpadQuickLog({
           {rupeeFormatter.format(rupees)}
         </span>
       </div>
+
+      <Input
+        type="text"
+        inputMode="text"
+        autoComplete="off"
+        maxLength={280}
+        value={label}
+        onChange={(e) => setLabel(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            (e.target as HTMLInputElement).blur();
+          }
+        }}
+        placeholder="Add a label (optional"
+        aria-label="Label"
+      />
 
       {validPresets.length > 0 ? (
         <div className="flex flex-col gap-1.5">
@@ -204,7 +241,11 @@ export function NumpadQuickLog({
                   ) : null}
                   <span>{p.label}</span>
                   <span className="tabular-nums text-(--muted)">
-                    {formatCurrency(p.amountPaise, defaultCurrency, defaultLocale)}
+                    {formatCurrency(
+                      p.amountPaise,
+                      defaultCurrency,
+                      defaultLocale,
+                    )}
                   </span>
                 </button>
               );
