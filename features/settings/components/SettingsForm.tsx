@@ -7,14 +7,31 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation } from "@tanstack/react-query";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
-import { ArrowRight, Moon, Sun, Monitor, Plus, Target, Trash2, Zap } from "lucide-react";
-import { Card, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  ArrowRight,
+  Moon,
+  Sun,
+  Monitor,
+  Plus,
+  Target,
+  Trash2,
+  ChevronRight,
+  Zap,
+} from "lucide-react";
+import {
+  Card,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { FormError, FormField } from "@/components/ui/form-field";
 import { MoneyInput } from "@/features/shared/components/MoneyInput";
 import { CategoryIcon } from "@/features/categories/components/CategoryIcon";
+import { formatCurrency } from "@/lib/format/money";
+import { QuickPresetEditSheet } from "./QuickPresetEditSheet";
 import { settingsInputSchema, type SettingsInput } from "../schema";
 import { updateSettingsAction, type ActionResult } from "../actions";
 import type { PlainSettings } from "@/db/repositories/settings";
@@ -73,8 +90,17 @@ export function SettingsForm({ initial, categories }: Props) {
 
   const weekStart = form.watch("weekStart");
   const quickPresets = form.watch("quickPresets") ?? [];
+  const [editingIndex, setEditingIndex] = useState<number | "new" | null>(null);
+  const editingPreset =
+    typeof editingIndex === "number"
+      ? (quickPresets[editingIndex] ?? null)
+      : null;
 
-  const mutation = useMutation<ActionResult<PlainSettings>, Error, SettingsInput>({
+  const mutation = useMutation<
+    ActionResult<PlainSettings>,
+    Error,
+    SettingsInput
+  >({
     mutationFn: (values) => updateSettingsAction(values),
     onSuccess: (res) => {
       if (!res.ok) {
@@ -105,7 +131,11 @@ export function SettingsForm({ initial, categories }: Props) {
           <CardHeader>
             <CardTitle>Appearance</CardTitle>
           </CardHeader>
-          <div role="radiogroup" aria-label="Theme" className="flex flex-wrap gap-2">
+          <div
+            role="radiogroup"
+            aria-label="Theme"
+            className="flex flex-wrap gap-2"
+          >
             {THEMES.map(({ value, label, icon: Icon }) => {
               const active = mounted ? theme === value : value === "system";
               return (
@@ -172,36 +202,23 @@ export function SettingsForm({ initial, categories }: Props) {
                 <div>
                   <CardTitle>Quick log presets</CardTitle>
                   <CardDescription>
-                    Tap a preset in the quick-log sheet to log it instantly. Up to 6.
+                    Tap a preset in the quick-log sheet to log it instantly. Up
+                    to 6.
                   </CardDescription>
                 </div>
               </div>
-              {quickPresets.length < 6 && variableCategories.length > 0 ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => {
-                    const next = [
-                      ...quickPresets,
-                      {
-                        id:
-                          typeof crypto !== "undefined" && "randomUUID" in crypto
-                            ? crypto.randomUUID()
-                            : `p${Date.now()}-${quickPresets.length}`,
-                        label: "",
-                        amountPaise: 0,
-                        categoryId: variableCategories[0]?.id ?? "",
-                      },
-                    ];
-                    form.setValue("quickPresets", next, {
-                      shouldDirty: true,
-                    });
-                  }}
-                >
-                  <Plus className="h-4 w-4" aria-hidden /> Add
-                </Button>
-              ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                disabled={
+                  quickPresets.length >= 6 || variableCategories.length === 0
+                }
+                onClick={() => setEditingIndex("new")}
+              >
+                <Plus className="h-4 w-4" aria-hidden /> Add ·{" "}
+                {quickPresets.length}/6
+              </Button>
             </CardHeader>
 
             {variableCategories.length === 0 ? (
@@ -210,105 +227,92 @@ export function SettingsForm({ initial, categories }: Props) {
               </p>
             ) : quickPresets.length === 0 ? (
               <p className="text-xs text-(--muted)">
-                No presets yet. Add one — say <em>Coffee · ₹250</em> — and it appears at the top of the quick-log sheet.
+                No presets yet. Add one — say <em>Coffee · ₹250</em> — and it
+                appears at the top of the quick-log sheet.
               </p>
             ) : (
-              <ul className="flex flex-col gap-3">
+              <ul className="flex flex-col divide-y divide-(--border) rounded-[var(--radius-input)] border border-(--border) bg-(--surface-2)/20">
                 {quickPresets.map((p, i) => {
                   const cat = categoryById.get(p.categoryId);
                   return (
-                    <li
-                      key={p.id}
-                      className="flex flex-col gap-2 rounded-[var(--radius-input)] border border-(--border) bg-(--surface-2)/30 p-3 sm:flex-row sm:items-center"
-                    >
-                      <div className="flex items-center gap-2 sm:w-12">
+                    <li key={p.id}>
+                      <button
+                        type="button"
+                        onClick={() => setEditingIndex(i)}
+                        className="flex w-full items-center gap-3 px- py-3 text-left transition-colors hover:bg-(--surface-2)/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ring) focus-visible:ring-inset"
+                      >
                         {cat ? (
-                          <CategoryIcon name={cat.icon} color={cat.color} size="sm" />
+                          <CategoryIcon
+                            name={cat.icon}
+                            color={cat.color}
+                            size="md"
+                          />
                         ) : (
                           <span
                             aria-hidden
-                            className="h-7 w-7 rounded-[var(--radius-input)] bg-(--surface-2)"
+                            className="h-9 w-9 shrink-0 rounded-[var(--radius-input)] bg-(--surface-2)"
                           />
                         )}
-                      </div>
-                      <FormField className="flex-1">
-                        <Label htmlFor={`preset-label-${i}`} className="sr-only">
-                          Preset label
-                        </Label>
-                        <Input
-                          id={`preset-label-${i}`}
-                          placeholder="Coffee"
-                          maxLength={24}
-                          value={p.label}
-                          onChange={(e) => {
-                            const next = [...quickPresets];
-                            next[i] = { ...p, label: e.target.value };
-                            form.setValue("quickPresets", next, {
-                              shouldDirty: true,
-                            });
-                          }}
+
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-semibold text-(--text)">
+                            {p.label || "Untitled preset"}
+                          </p>
+                          <p className="truncate text-xs text-(--muted)">
+                            {cat?.name ?? "No category"}
+                          </p>
+                        </div>
+                        <p className="shrink-0 tabular-nums text-sm font-semibold text-(--text)">
+                          {formatCurrency(
+                            p.amountPaise,
+                            initial.defaultCurrency,
+                            initial.locale,
+                          )}
+                        </p>
+                        <ChevronRight
+                          className="h-4 w-4 shrink-0 text-(--muted)"
+                          aria-hidden
                         />
-                      </FormField>
-                      <FormField className="sm:w-32">
-                        <Label htmlFor={`preset-amount-${i}`} className="sr-only">
-                          Preset amount
-                        </Label>
-                        <MoneyInput
-                          id={`preset-amount-${i}`}
-                          valueMinor={p.amountPaise}
-                          onChangeMinor={(v) => {
-                            const next = [...quickPresets];
-                            next[i] = { ...p, amountPaise: v };
-                            form.setValue("quickPresets", next, {
-                              shouldDirty: true,
-                            });
-                          }}
-                          currency={initial.defaultCurrency}
-                          locale={initial.locale}
-                        />
-                      </FormField>
-                      <FormField className="sm:w-44">
-                        <Label htmlFor={`preset-cat-${i}`} className="sr-only">
-                          Category
-                        </Label>
-                        <select
-                          id={`preset-cat-${i}`}
-                          value={p.categoryId}
-                          onChange={(e) => {
-                            const next = [...quickPresets];
-                            next[i] = { ...p, categoryId: e.target.value };
-                            form.setValue("quickPresets", next, {
-                              shouldDirty: true,
-                            });
-                          }}
-                          className="flex h-11 w-full rounded-[var(--radius-input)] border border-(--border) bg-(--surface) px-3 text-base text-(--text) focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ring) sm:h-9 sm:text-sm"
-                        >
-                          {variableCategories.map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {c.name}
-                            </option>
-                          ))}
-                        </select>
-                      </FormField>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        aria-label="Delete preset"
-                        onClick={() => {
-                          const next = quickPresets.filter((_, j) => j !== i);
-                          form.setValue("quickPresets", next, {
-                            shouldDirty: true,
-                          });
-                        }}
-                      >
-                        <Trash2 className="h-4 w-4" aria-hidden />
-                      </Button>
+                      </button>
                     </li>
                   );
                 })}
               </ul>
             )}
+
+            <QuickPresetEditSheet
+              open={editingIndex != null}
+              onOpenChange={(o) => {
+                if (!o) setEditingIndex(null);
+              }}
+              preset={editingPreset}
+              variableCategories={variableCategories}
+              defaultCurrency={initial.defaultCurrency}
+              locale={initial.locale}
+              onSave={(next) => {
+                if (editingIndex === "new") {
+                  form.setValue("quickPresets", [...quickPresets, next], {
+                    shouldDirty: true,
+                  });
+                } else if (typeof editingIndex === "number") {
+                  const arr = [...quickPresets];
+                  arr[editingIndex] = next;
+                  form.setValue("quickPresets", arr, { shouldDirty: true });
+                }
+              }}
+              onDelete={
+                typeof editingIndex === "number"
+                  ? () => {
+                      const arr = quickPresets.filter(
+                        (_, j) => j !== editingIndex,
+                      );
+                      form.setValue("quickPresets", arr, {
+                        shouldDirty: true,
+                      });
+                    }
+                  : undefined
+              }
+            />
           </Card>
         </div>
 
@@ -330,10 +334,14 @@ export function SettingsForm({ initial, categories }: Props) {
                       setValueAs: (v: unknown) =>
                         typeof v === "string" ? v.toUpperCase().trim() : v,
                     })}
-                    aria-invalid={Boolean(form.formState.errors.defaultCurrency)}
+                    aria-invalid={Boolean(
+                      form.formState.errors.defaultCurrency,
+                    )}
                     className="uppercase"
                   />
-                  <FormError message={form.formState.errors.defaultCurrency?.message} />
+                  <FormError
+                    message={form.formState.errors.defaultCurrency?.message}
+                  />
                 </FormField>
 
                 <FormField>
@@ -350,7 +358,11 @@ export function SettingsForm({ initial, categories }: Props) {
 
               <FormField>
                 <Label>Week starts on</Label>
-                <div role="radiogroup" aria-label="Week starts on" className="flex gap-2">
+                <div
+                  role="radiogroup"
+                  aria-label="Week starts on"
+                  className="flex gap-2"
+                >
                   {WEEK_START_OPTIONS.map((opt) => (
                     <button
                       key={opt.value}
@@ -358,7 +370,9 @@ export function SettingsForm({ initial, categories }: Props) {
                       role="radio"
                       aria-checked={weekStart === opt.value}
                       onClick={() =>
-                        form.setValue("weekStart", opt.value, { shouldDirty: true })
+                        form.setValue("weekStart", opt.value, {
+                          shouldDirty: true,
+                        })
                       }
                       className={cn(
                         "rounded-[var(--radius-input)] border px-3 py-1.5 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--ring)",
