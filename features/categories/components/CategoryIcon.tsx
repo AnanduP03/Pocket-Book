@@ -16,20 +16,19 @@ export function CategoryIcon({
   const dim = {
     sm: { box: "h-7 w-7", icon: "h-3.5 w-3.5" },
     md: { box: "h-9 w-9", icon: "h-4 w-4" },
-    lg: { box: "h-12 w-12", icon: "h-5 w-5" },
+    lg: { box: "h-12 w-12", icon: "h-6 w-6" },
   }[size];
 
   return (
     <span
       aria-hidden
       className={cn(
-        "inline-flex items-center justify-center rounded-[var(--radius-input)]",
+        "inline-flex shrink-0 items-center justify-center rounded-[var(--radius-input)] border border-(--border) bg-(--surface-2)",
         dim.box,
         className,
       )}
-      style={{ background: color }}
     >
-      <Icon className={cn(dim.icon, "text-(--text)")} />
+      <Icon className={dim.icon} style={{ color }} strokeWidth={2.25} />
     </span>
   );
 }

@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
   Select,
+  SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -21,9 +22,8 @@ import {
 import { PlainCategory } from "@/db/repositories/categories";
 import { CategoryIcon } from "@/features/categories/components/CategoryIcon";
 import { MoneyInput } from "@/features/shared/components/MoneyInput";
-import { SelectContent } from "@radix-ui/react-select";
 import { Check, Trash2 } from "lucide-react";
-import { useEffect, useEffectEvent, useState } from "react";
+import { useEffect, useState } from "react";
 
 export type PresetDraft = {
   id: string;
